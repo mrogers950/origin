@@ -15,6 +15,11 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapihelper "k8s.io/kubernetes/pkg/api/helper"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+	"k8s.io/kubernetes/pkg/client/record"
+	"k8s.io/kubernetes/pkg/client/testing/core"
+	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/types"
+	"k8s.io/kubernetes/pkg/util/sets"
 
 	ostestclient "github.com/openshift/origin/pkg/client/testclient"
 	oauthapi "github.com/openshift/origin/pkg/oauth/apis/oauth"
@@ -547,7 +552,7 @@ func TestGetClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		delegate := &fakeDelegate{}
-		getter := NewServiceAccountOAuthClientGetter(tc.kubeClient.Core(), tc.kubeClient.Core(), tc.osClient, delegate, oauthapi.GrantHandlerPrompt)
+		getter := NewServiceAccountOAuthClientGetter(tc.kubeClient.Core(), tc.kubeClient.Core(), tc.kubeClient.Core(), tc.osClient, delegate, oauthapi.GrantHandlerPrompt)
 		client, err := getter.GetClient(apirequest.NewContext(), tc.clientName, &metav1.GetOptions{})
 		switch {
 		case len(tc.expectedErr) == 0 && err == nil:
@@ -816,8 +821,10 @@ func TestParseModelsMap(t *testing.T) {
 			},
 		},
 	} {
-		if !reflect.DeepEqual(test.expected, parseModelsMap(test.annotations, decoder)) {
-			t.Errorf("%s: expected %#v, got %#v", test.name, test.expected, parseModelsMap(test.annotations, decoder))
+		recorder := record.NewFakeRecorder(1000)
+		sa := &kapi.ServiceAccount{ObjectMeta: kapi.ObjectMeta{Annotations: test.annotations}}
+		if !reflect.DeepEqual(test.expected, parseModelsMap(sa, decoder, recorder)) {
+			t.Errorf("%s: expected %#v, got %#v", test.name, test.expected, parseModelsMap(sa, decoder, recorder))
 		}
 	}
 }
