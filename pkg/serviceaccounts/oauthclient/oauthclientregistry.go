@@ -62,7 +62,7 @@ var legacyRouteGroupKind = routeapi.LegacySchemeGroupVersion.WithKind(routeKind)
 type saOAuthClientAdapter struct {
 	saClient     kcoreclient.ServiceAccountsGetter
 	secretClient kcoreclient.SecretsGetter
-	eventsClient kcoreclient.EventsGetter
+	recorder     record.EventRecorder
 	routeClient  osclient.RoutesNamespacer
 	// TODO add ingress support
 	//ingressClient ??
@@ -189,8 +189,26 @@ func (uri *redirectURI) merge(m *model) {
 
 var _ oauthclient.Getter = &saOAuthClientAdapter{}
 
-func NewServiceAccountOAuthClientGetter(saClient kcoreclient.ServiceAccountsGetter, secretClient kcoreclient.SecretsGetter, eventClient kcoreclient.EventsGetter, routeClient osclient.RoutesNamespacer, delegate oauthclient.Getter, grantMethod oauthapi.GrantHandlerType) oauthclient.Getter {
-	return &saOAuthClientAdapter{saClient: saClient, secretClient: secretClient, eventsClient: eventClient, routeClient: routeClient, delegate: delegate, grantMethod: grantMethod, decoder: kapi.Codecs.UniversalDecoder()}
+func NewServiceAccountOAuthClientGetter(
+	saClient kcoreclient.ServiceAccountsGetter,
+	secretClient kcoreclient.SecretsGetter,
+	eventClient kcoreclient.EventsGetter,
+	routeClient osclient.RoutesNamespacer,
+	delegate oauthclient.Getter,
+	grantMethod oauthapi.GrantHandlerType,
+) oauthclient.Getter {
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&kcoreclient.EventSinkImpl{Interface: eventClient.Events("")})
+	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "service-account-oauth-client-getter"})
+	return &saOAuthClientAdapter{
+		saClient:     saClient,
+		secretClient: secretClient,
+		recorder:     recorder,
+		routeClient:  routeClient,
+		delegate:     delegate,
+		grantMethod:  grantMethod,
+		decoder:      kapi.Codecs.UniversalDecoder(),
+	}
 }
 
 func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, options *metav1.GetOptions) (*oauthapi.OAuthClient, error) {
@@ -204,16 +222,14 @@ func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, op
 		return nil, err
 	}
 
-	recorder := a.getEventRecorder(saNamespace)
-
 	redirectURIs := []string{}
-	if modelsMap := parseModelsMap(sa, a.decoder, recorder); len(modelsMap) > 0 {
+	if modelsMap := parseModelsMap(sa, a.decoder, a.recorder); len(modelsMap) > 0 {
 		if uris := a.extractRedirectURIs(modelsMap, saNamespace); len(uris) > 0 {
 			redirectURIs = append(redirectURIs, uris.extractValidRedirectURIStrings()...)
 		}
 	}
 	if len(redirectURIs) == 0 {
-		recorder.Event(sa, kapi.EventTypeWarning, "OAuthNoRedirectURIs", "Has no redirectURIs")
+		a.recorder.Event(sa, kapi.EventTypeWarning, "OAuthNoRedirectURIs", "Has no redirectURIs")
 		return nil, fmt.Errorf(
 			"%v has no redirectURIs; set %v<some-value>=<redirect> or create a dynamic URI using %v<some-value>=<reference>",
 			name, OAuthRedirectModelAnnotationURIPrefix, OAuthRedirectModelAnnotationReferencePrefix,
@@ -245,16 +261,9 @@ func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, op
 	}
 
 	// TODO: is this safe to tell - could leak Route info?
-	recorder.Eventf(sa, kapi.EventTypeNormal, "OAuthAllRedirectURIs", "Has the following redirectURIs: %v", saClient.RedirectURIs)
+	a.recorder.Eventf(sa, kapi.EventTypeNormal, "OAuthAllRedirectURIs", "Has the following redirectURIs: %v", saClient.RedirectURIs)
 
 	return saClient, nil
-}
-
-// TODO this is super naive and inefficient
-func (a *saOAuthClientAdapter) getEventRecorder(namespace string) record.EventRecorder {
-	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartRecordingToSink(&kcoreclient.EventSinkImpl{Interface: a.eventsClient.Events(namespace)})
-	return eventBroadcaster.NewRecorder(kapi.EventSource{Component: "service-account-oauth-client-getter"})
 }
 
 // parseModelsMap builds a map of model name to model using a service account's annotations.
