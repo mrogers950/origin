@@ -115,7 +115,7 @@ func getUniqueName(basename string, existingNames *sets.String) string {
 
 // RoleBindingAccessor is used by role modification commands to access and modify roles
 type RoleBindingAccessor interface {
-	GetExistingRoleBindingsForRole(roleNamespace, role string) ([]*authorizationapi.RoleBinding, error)
+	GetExistingRoleBindingsForRole(roleNamespace, role, rb string) ([]*authorizationapi.RoleBinding, error)
 	GetExistingRoleBindingNames() (*sets.String, error)
 	UpdateRoleBinding(binding *authorizationapi.RoleBinding) error
 	CreateRoleBinding(binding *authorizationapi.RoleBinding) error
@@ -131,21 +131,13 @@ func NewLocalRoleBindingAccessor(bindingNamespace string, client client.Interfac
 	return LocalRoleBindingAccessor{bindingNamespace, client}
 }
 
-func (a LocalRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role string) ([]*authorizationapi.RoleBinding, error) {
+func (a LocalRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role, rb string) ([]*authorizationapi.RoleBinding, error) {
 	existingBindings, err := a.Client.PolicyBindings(a.BindingNamespace).Get(authorizationapi.GetPolicyBindingName(roleNamespace), metav1.GetOptions{})
 	if err != nil && !kapierrors.IsNotFound(err) {
 		return nil, err
 	}
 
-	ret := make([]*authorizationapi.RoleBinding, 0)
-	// see if we can find an existing binding that points to the role in question.
-	for _, currBinding := range existingBindings.RoleBindings {
-		if currBinding.RoleRef.Name == role {
-			t := currBinding
-			ret = append(ret, t)
-		}
-	}
-
+	ret := findBindingsByRoleNames(existingBindings.RoleBindings, role, rb)
 	return ret, nil
 }
 
@@ -186,21 +178,28 @@ func NewClusterRoleBindingAccessor(client client.Interface) ClusterRoleBindingAc
 	return ClusterRoleBindingAccessor{client}
 }
 
-func (a ClusterRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role string) ([]*authorizationapi.RoleBinding, error) {
+// Filter out bindings by role or both role and rb if rb is a non-empty string
+func findBindingsByRoleNames(bindings authorizationapi.RoleBindingsByName, role string, rb string) []*authorizationapi.RoleBinding {
+	ret := make([]*authorizationapi.RoleBinding, 0)
+
+	for _, currBinding := range bindings {
+		if currBinding.RoleRef.Name == role && (len(rb) == 0 || rb == currBinding.Name) {
+			t := currBinding
+			ret = append(ret, t)
+		}
+	}
+
+	return ret
+}
+
+func (a ClusterRoleBindingAccessor) GetExistingRoleBindingsForRole(roleNamespace, role, rb string) ([]*authorizationapi.RoleBinding, error) {
 	uncast, err := a.Client.ClusterPolicyBindings().Get(authorizationapi.GetPolicyBindingName(roleNamespace), metav1.GetOptions{})
 	if err != nil && !kapierrors.IsNotFound(err) {
 		return nil, err
 	}
 	existingBindings := authorizationapi.ToPolicyBinding(uncast)
 
-	ret := make([]*authorizationapi.RoleBinding, 0)
-	// see if we can find an existing binding that points to the role in question.
-	for _, currBinding := range existingBindings.RoleBindings {
-		if currBinding.RoleRef.Name == role {
-			t := currBinding
-			ret = append(ret, t)
-		}
-	}
+	ret := findBindingsByRoleNames(existingBindings.RoleBindings, role, rb)
 
 	return ret, nil
 }
