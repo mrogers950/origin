@@ -41,6 +41,7 @@ var (
 type RoleModificationOptions struct {
 	RoleNamespace       string
 	RoleName            string
+	RoleBindingName     string
 	RoleBindingAccessor RoleBindingAccessor
 
 	Targets  []string
@@ -71,6 +72,7 @@ func NewCmdAddRoleToGroup(name, fullName string, f *clientcmd.Factory, out io.Wr
 		},
 	}
 
+	cmd.Flags().StringVar(&options.RoleBindingName, "rolebinding-name", "", "Name of the rolebinding to modify or create. If left empty, appends to the first rolebinding found for the given role")
 	cmd.Flags().StringVar(&options.RoleNamespace, "role-namespace", "", "namespace where the role is located: empty means a role defined in cluster policy")
 
 	return cmd
@@ -99,6 +101,7 @@ func NewCmdAddRoleToUser(name, fullName string, f *clientcmd.Factory, out io.Wri
 		},
 	}
 
+	cmd.Flags().StringVar(&options.RoleBindingName, "rolebinding-name", "", "Name of the rolebinding to modify or create. If left empty, appends to the first rolebinding found for the given role")
 	cmd.Flags().StringVar(&options.RoleNamespace, "role-namespace", "", "namespace where the role is located: empty means a role defined in cluster policy")
 	cmd.Flags().StringSliceVarP(&saNames, "serviceaccount", "z", saNames, "service account in the current namespace to use as a user")
 
@@ -180,6 +183,7 @@ func NewCmdAddClusterRoleToGroup(name, fullName string, f *clientcmd.Factory, ou
 		},
 	}
 
+	cmd.Flags().StringVar(&options.RoleBindingName, "rolebinding-name", "", "Name of the rolebinding to modify or create. If left empty, appends to the first rolebinding found for the given role")
 	return cmd
 }
 
@@ -205,6 +209,7 @@ func NewCmdAddClusterRoleToUser(name, fullName string, f *clientcmd.Factory, out
 		},
 	}
 
+	cmd.Flags().StringVar(&options.RoleBindingName, "rolebinding-name", "", "Name of the rolebinding to modify or create. If left empty, appends to the first rolebinding found for the given role")
 	cmd.Flags().StringSliceVarP(&saNames, "serviceaccount", "z", saNames, "service account in the current namespace to use as a user")
 
 	return cmd
@@ -267,6 +272,7 @@ func (o *RoleModificationOptions) CompleteUserWithSA(f *clientcmd.Factory, args 
 	}
 
 	o.RoleName = args[0]
+
 	if len(args) > 1 {
 		o.Users = append(o.Users, args[1:]...)
 	}
@@ -332,7 +338,7 @@ func (o *RoleModificationOptions) Complete(f *clientcmd.Factory, args []string, 
 }
 
 func (o *RoleModificationOptions) AddRole() error {
-	roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName)
+	roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName, o.RoleBindingName)
 	if err != nil {
 		return err
 	}
@@ -371,9 +377,16 @@ subjectCheck:
 	}
 
 	if isUpdate {
+		if len(o.RoleBindingName) > 0 {
+			roleBinding.Name = o.RoleBindingName
+		}
 		err = o.RoleBindingAccessor.UpdateRoleBinding(roleBinding)
 	} else {
-		roleBinding.Name = getUniqueName(o.RoleName, roleBindingNames)
+		if len(o.RoleBindingName) > 0 {
+			roleBinding.Name = o.RoleBindingName
+		} else {
+			roleBinding.Name = getUniqueName(o.RoleName, roleBindingNames)
+		}
 		err = o.RoleBindingAccessor.CreateRoleBinding(roleBinding)
 		// If the rolebinding was created in the meantime, rerun
 		if kapierrors.IsAlreadyExists(err) {
@@ -388,7 +401,7 @@ subjectCheck:
 }
 
 func (o *RoleModificationOptions) RemoveRole() error {
-	roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName)
+	roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName, "")
 	if err != nil {
 		return err
 	}
