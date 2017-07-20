@@ -15,11 +15,7 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapihelper "k8s.io/kubernetes/pkg/api/helper"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
-	"k8s.io/kubernetes/pkg/client/record"
-	"k8s.io/kubernetes/pkg/client/testing/core"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/types"
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/client-go/tools/record"
 
 	ostestclient "github.com/openshift/origin/pkg/client/testclient"
 	oauthapi "github.com/openshift/origin/pkg/oauth/apis/oauth"
@@ -822,7 +818,7 @@ func TestParseModelsMap(t *testing.T) {
 		},
 	} {
 		recorder := record.NewFakeRecorder(1000)
-		sa := &kapi.ServiceAccount{ObjectMeta: kapi.ObjectMeta{Annotations: test.annotations}}
+		sa := &kapi.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Annotations: test.annotations}}
 		if !reflect.DeepEqual(test.expected, parseModelsMap(sa, decoder, recorder)) {
 			t.Errorf("%s: expected %#v, got %#v", test.name, test.expected, parseModelsMap(sa, decoder, recorder))
 		}

@@ -14,8 +14,7 @@ import (
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
-	"k8s.io/kubernetes/pkg/client/record"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/serviceaccount"
 
 	scopeauthorizer "github.com/openshift/origin/pkg/authorization/authorizer/scope"
