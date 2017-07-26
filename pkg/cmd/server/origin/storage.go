@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/util/flowcontrol"
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -343,7 +344,15 @@ func (c OpenshiftAPIConfig) GetRestStorage() (map[schema.GroupVersion]map[string
 		saAccountGrantMethod = oauthapi.GrantHandlerType(c.ServiceAccountMethod)
 	}
 
-	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(c.KubeClientInternal.Core(), c.KubeClientInternal.Core(), c.DeprecatedOpenshiftClient, clientRegistry, saAccountGrantMethod)
+	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(
+		c.KubeClientInternal.Core(),
+		c.KubeClientInternal.Core(),
+		corev1.New(c.KubeClientExternal.Core().RESTClient()).Events(""),
+		c.DeprecatedOpenshiftClient,
+		clientRegistry,
+		saAccountGrantMethod,
+	)
+
 	authorizeTokenStorage, err := authorizetokenetcd.NewREST(c.GenericConfig.RESTOptionsGetter, combinedOAuthClientGetter)
 	if err != nil {
 		return nil, fmt.Errorf("error building REST storage: %v", err)
