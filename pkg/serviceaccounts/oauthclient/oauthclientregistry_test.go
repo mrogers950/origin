@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	clientgotesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapihelper "k8s.io/kubernetes/pkg/api/helper"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
@@ -41,6 +42,7 @@ func TestGetClient(t *testing.T) {
 
 		expectedDelegation  bool
 		expectedErr         string
+		expectedEventMsg    string
 		expectedClient      *oauthapi.OAuthClient
 		expectedKubeActions []clientgotesting.Action
 		expectedOSActions   []clientgotesting.Action
@@ -76,6 +78,7 @@ func TestGetClient(t *testing.T) {
 				}),
 			osClient:            ostestclient.NewSimpleFake(),
 			expectedErr:         `system:serviceaccount:ns-01:default has no redirectURIs; set serviceaccounts.openshift.io/oauth-redirecturi.<some-value>`,
+			expectedEventMsg:    `Warning NoSAOAuthRedirectURIs system:serviceaccount:ns-01:default has no redirectURIs; set serviceaccounts.openshift.io/oauth-redirecturi.<some-value>=<redirect> or create a dynamic URI using serviceaccounts.openshift.io/oauth-redirectreference.<some-value>=<reference>`,
 			expectedKubeActions: []clientgotesting.Action{clientgotesting.NewGetAction(serviceAccountsResource, "ns-01", "default")},
 			expectedOSActions:   []clientgotesting.Action{},
 		},
@@ -90,8 +93,9 @@ func TestGetClient(t *testing.T) {
 						Annotations: map[string]string{OAuthRedirectModelAnnotationURIPrefix + "one": "http://anywhere"},
 					},
 				}),
-			osClient:    ostestclient.NewSimpleFake(),
-			expectedErr: `system:serviceaccount:ns-01:default has no tokens`,
+			osClient:         ostestclient.NewSimpleFake(),
+			expectedErr:      `system:serviceaccount:ns-01:default has no tokens`,
+			expectedEventMsg: `Warning NoSAOAuthTokens system:serviceaccount:ns-01:default has no tokens`,
 			expectedKubeActions: []clientgotesting.Action{
 				clientgotesting.NewGetAction(serviceAccountsResource, "ns-01", "default"),
 				clientgotesting.NewListAction(secretsResource, secretKind, "ns-01", metav1.ListOptions{}),
@@ -547,7 +551,17 @@ func TestGetClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		delegate := &fakeDelegate{}
-		getter := NewServiceAccountOAuthClientGetter(tc.kubeClient.Core(), tc.kubeClient.Core(), tc.osClient, delegate, oauthapi.GrantHandlerPrompt)
+		fakerecorder := record.NewFakeRecorder(100)
+		getter := saOAuthClientAdapter{
+			saClient:      tc.kubeClient.Core(),
+			secretClient:  tc.kubeClient.Core(),
+			eventRecorder: fakerecorder,
+			routeClient:   tc.osClient,
+			delegate:      delegate,
+			grantMethod:   oauthapi.GrantHandlerPrompt,
+			decoder:       kapi.Codecs.UniversalDecoder(),
+		}
+
 		client, err := getter.GetClient(apirequest.NewContext(), tc.clientName, &metav1.GetOptions{})
 		switch {
 		case len(tc.expectedErr) == 0 && err == nil:
@@ -577,8 +591,14 @@ func TestGetClient(t *testing.T) {
 			t.Errorf("%s: expected %#v, got %#v", tc.name, tc.expectedOSActions, tc.osClient.Actions())
 			continue
 		}
-	}
 
+		if len(tc.expectedEventMsg) > 0 {
+			ev := <-fakerecorder.Events
+			if tc.expectedEventMsg != ev {
+				t.Errorf("%s: expected event message %#v, got %#v", tc.name, tc.expectedEventMsg, ev)
+			}
+		}
+	}
 }
 
 type fakeDelegate struct {
@@ -816,8 +836,9 @@ func TestParseModelsMap(t *testing.T) {
 			},
 		},
 	} {
-		if !reflect.DeepEqual(test.expected, parseModelsMap(test.annotations, decoder)) {
-			t.Errorf("%s: expected %#v, got %#v", test.name, test.expected, parseModelsMap(test.annotations, decoder))
+		fails := []string{}
+		if !reflect.DeepEqual(test.expected, parseModelsMap(test.annotations, decoder, &fails)) {
+			t.Errorf("%s: expected %#v, got %#v", test.name, test.expected, parseModelsMap(test.annotations, decoder, &fails))
 		}
 	}
 }
@@ -1183,7 +1204,10 @@ func buildRouteClient(routes []*routeapi.Route) saOAuthClientAdapter {
 	for _, route := range routes {
 		objects = append(objects, route)
 	}
-	return saOAuthClientAdapter{routeClient: ostestclient.NewSimpleFake(objects...)}
+	return saOAuthClientAdapter{
+		routeClient:   ostestclient.NewSimpleFake(objects...),
+		eventRecorder: record.NewFakeRecorder(100),
+	}
 }
 
 func buildRedirectObjectReferenceString(kind, name, group string) string {
