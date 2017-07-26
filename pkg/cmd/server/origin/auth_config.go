@@ -8,6 +8,7 @@ import (
 	"github.com/pborman/uuid"
 
 	"k8s.io/apiserver/pkg/storage"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	"github.com/openshift/origin/pkg/auth/server/session"
@@ -29,6 +30,8 @@ type AuthConfig struct {
 
 	// KubeClient is kubeclient with enough permission for the auth API
 	KubeClient kclientset.Interface
+
+	KubeExternalClient kclientsetexternal.Interface
 
 	// OpenShiftClient is osclient with enough permission for the auth API
 	OpenShiftClient osclient.Interface
@@ -52,6 +55,7 @@ type AuthConfig struct {
 func BuildAuthConfig(masterConfig *MasterConfig) (*AuthConfig, error) {
 	options := masterConfig.Options
 	osClient, kubeClient := masterConfig.OAuthServerClients()
+	kubeExternalClient := masterConfig.KubeClientsetExternal()
 
 	var sessionAuth *session.Authenticator
 	var sessionHandlerWrapper handlerWrapper
@@ -86,7 +90,8 @@ func BuildAuthConfig(masterConfig *MasterConfig) (*AuthConfig, error) {
 	ret := &AuthConfig{
 		Options: *options.OAuthConfig,
 
-		KubeClient: kubeClient,
+		KubeClient:         kubeClient,
+		KubeExternalClient: kubeExternalClient,
 
 		OpenShiftClient: osClient,
 

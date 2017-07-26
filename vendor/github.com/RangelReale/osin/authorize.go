@@ -125,7 +125,7 @@ func (s *Server) HandleAuthorizeRequest(w *Response, r *http.Request) *Authorize
 	// must have a valid client
 	ret.Client, err = w.Storage.GetClient(r.Form.Get("client_id"))
 	if err != nil {
-		w.SetErrorState(E_SERVER_ERROR, "", ret.State)
+		w.SetErrorState(E_SERVER_ERROR, "Internal error; See 'oc get events' for more information", ret.State)
 		w.InternalError = err
 		return nil
 	}

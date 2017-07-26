@@ -10,8 +10,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	apiserverserviceaccount "k8s.io/apiserver/pkg/authentication/serviceaccount"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/record"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/serviceaccount"
@@ -21,7 +25,6 @@ import (
 	oauthapi "github.com/openshift/origin/pkg/oauth/apis/oauth"
 	"github.com/openshift/origin/pkg/oauth/registry/oauthclient"
 	routeapi "github.com/openshift/origin/pkg/route/apis/route"
-	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -58,9 +61,10 @@ var legacyRouteGroupKind = routeapi.LegacySchemeGroupVersion.WithKind(routeKind)
 // var ingressGroupKind = routeapi.SchemeGroupVersion.WithKind(IngressKind).GroupKind()
 
 type saOAuthClientAdapter struct {
-	saClient     kcoreclient.ServiceAccountsGetter
-	secretClient kcoreclient.SecretsGetter
-	routeClient  osclient.RoutesNamespacer
+	saClient      kcoreclient.ServiceAccountsGetter
+	secretClient  kcoreclient.SecretsGetter
+	eventRecorder record.EventRecorder
+	routeClient   osclient.RoutesNamespacer
 	// TODO add ingress support
 	//ingressClient ??
 
@@ -186,11 +190,14 @@ func (uri *redirectURI) merge(m *model) {
 
 var _ oauthclient.Getter = &saOAuthClientAdapter{}
 
-func NewServiceAccountOAuthClientGetter(saClient kcoreclient.ServiceAccountsGetter, secretClient kcoreclient.SecretsGetter, routeClient osclient.RoutesNamespacer, delegate oauthclient.Getter, grantMethod oauthapi.GrantHandlerType) oauthclient.Getter {
-	return &saOAuthClientAdapter{saClient: saClient, secretClient: secretClient, routeClient: routeClient, delegate: delegate, grantMethod: grantMethod, decoder: kapi.Codecs.UniversalDecoder()}
+func NewServiceAccountOAuthClientGetter(saClient kcoreclient.ServiceAccountsGetter, secretClient kcoreclient.SecretsGetter, eventClient corev1.EventInterface, routeClient osclient.RoutesNamespacer, delegate oauthclient.Getter, grantMethod oauthapi.GrantHandlerType) oauthclient.Getter {
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: eventClient})
+	recorder := eventBroadcaster.NewRecorder(kapi.Scheme, clientv1.EventSource{Component: "service-account-oauth-client-getter"})
+	return &saOAuthClientAdapter{saClient: saClient, secretClient: secretClient, eventRecorder: recorder, routeClient: routeClient, delegate: delegate, grantMethod: grantMethod, decoder: kapi.Codecs.UniversalDecoder()}
 }
 
-func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, options *metav1.GetOptions) (*oauthapi.OAuthClient, error) {
+func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, options *metav1.GetOptions) (saClient *oauthapi.OAuthClient, err error) {
 	saNamespace, saName, err := apiserverserviceaccount.SplitUsername(name)
 	if err != nil {
 		return a.delegate.GetClient(ctx, name, options)
@@ -201,17 +208,28 @@ func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, op
 		return nil, err
 	}
 
+	failEvents := []string{}
+	var failReason string
+	// Create a warning event upon failure
+	defer func() {
+		if err != nil && len(failEvents) > 0 && len(failReason) > 0 {
+			a.eventRecorder.Eventf(sa, kapi.EventTypeWarning, failReason, "%s", strings.Join(failEvents, ","))
+		}
+	}()
+
 	redirectURIs := []string{}
-	if modelsMap := parseModelsMap(sa.Annotations, a.decoder); len(modelsMap) > 0 {
+	if modelsMap := parseModelsMap(sa.Annotations, a.decoder, &failEvents); len(modelsMap) > 0 {
 		if uris := a.extractRedirectURIs(modelsMap, saNamespace); len(uris) > 0 {
 			redirectURIs = append(redirectURIs, uris.extractValidRedirectURIStrings()...)
 		}
 	}
 	if len(redirectURIs) == 0 {
-		return nil, fmt.Errorf(
-			"%v has no redirectURIs; set %v<some-value>=<redirect> or create a dynamic URI using %v<some-value>=<reference>",
+		err = fmt.Errorf("%v has no redirectURIs; set %v<some-value>=<redirect> or create a dynamic URI using %v<some-value>=<reference>",
 			name, OAuthRedirectModelAnnotationURIPrefix, OAuthRedirectModelAnnotationReferencePrefix,
 		)
+		failReason = "NoSAOAuthRedirectURIs"
+		failEvents = append(failEvents, err.Error())
+		return nil, err
 	}
 
 	tokens, err := a.getServiceAccountTokens(sa)
@@ -219,12 +237,15 @@ func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, op
 		return nil, err
 	}
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("%v has no tokens", name)
+		err = fmt.Errorf("%v has no tokens", name)
+		failReason = "NoSAOAuthTokens"
+		failEvents = append(failEvents, err.Error())
+		return nil, err
 	}
 
 	saWantsChallenges, _ := strconv.ParseBool(sa.Annotations[OAuthWantChallengesAnnotationPrefix])
 
-	saClient := &oauthapi.OAuthClient{
+	saClient = &oauthapi.OAuthClient{
 		ObjectMeta:            metav1.ObjectMeta{Name: name},
 		ScopeRestrictions:     getScopeRestrictionsFor(saNamespace, saName),
 		AdditionalSecrets:     tokens,
@@ -243,7 +264,7 @@ func (a *saOAuthClientAdapter) GetClient(ctx apirequest.Context, name string, op
 // parseModelsMap builds a map of model name to model using a service account's annotations.
 // The model name is only used for building the map (it ties together the uri and reference annotations)
 // and serves no functional purpose other than making testing easier.
-func parseModelsMap(annotations map[string]string, decoder runtime.Decoder) map[string]model {
+func parseModelsMap(annotations map[string]string, decoder runtime.Decoder, fails *[]string) map[string]model {
 	models := map[string]model{}
 	for key, value := range annotations {
 		prefix, name, ok := parseModelPrefixName(key)
@@ -255,11 +276,15 @@ func parseModelsMap(annotations map[string]string, decoder runtime.Decoder) map[
 		case OAuthRedirectModelAnnotationURIPrefix:
 			if u, err := url.Parse(value); err == nil {
 				m.updateFromURI(u)
+			} else {
+				*fails = append(*fails, fmt.Sprintf("failed to parse SA annotation %q: %s", prefix, err.Error()))
 			}
 		case OAuthRedirectModelAnnotationReferencePrefix:
 			r := &oauthapi.OAuthRedirectReference{}
 			if err := runtime.DecodeInto(decoder, []byte(value), r); err == nil {
 				m.updateFromReference(&r.Reference)
+			} else {
+				*fails = append(*fails, fmt.Sprintf("failed to decode SA annotation %q: %s", prefix, err.Error()))
 			}
 		}
 		models[name] = m
