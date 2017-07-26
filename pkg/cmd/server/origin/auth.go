@@ -67,6 +67,7 @@ import (
 	"github.com/openshift/origin/pkg/oauth/server/osinserver/registrystorage"
 	oauthutil "github.com/openshift/origin/pkg/oauth/util"
 	saoauth "github.com/openshift/origin/pkg/serviceaccounts/oauthclient"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 const (
@@ -92,7 +93,15 @@ func (c *AuthConfig) WithOAuth(handler http.Handler) (http.Handler, error) {
 		return nil, err
 	}
 	clientRegistry := clientregistry.NewRegistry(clientStorage)
-	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(c.KubeClient.Core(), c.KubeClient.Core(), c.OpenShiftClient, clientRegistry, oauthapi.GrantHandlerType(c.Options.GrantConfig.ServiceAccountMethod))
+	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(
+		c.KubeClient.Core(),
+		c.KubeClient.Core(),
+		// TODO: fix this construction
+		corev1.New(c.KubeExternalClient.Core().RESTClient()).Events(""),
+		c.OpenShiftClient,
+		clientRegistry,
+		oauthapi.GrantHandlerType(c.Options.GrantConfig.ServiceAccountMethod),
+	)
 
 	accessTokenStorage, err := accesstokenetcd.NewREST(c.RESTOptionsGetter, combinedOAuthClientGetter, c.EtcdBackends...)
 	if err != nil {
