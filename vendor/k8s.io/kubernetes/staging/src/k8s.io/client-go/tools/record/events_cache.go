@@ -416,6 +416,24 @@ type EventCorrelateResult struct {
 	Skip bool
 }
 
+type EventCorrelatorOptions struct {
+	cacheSize                  int
+	spamBurst                  int
+	spamQPS                    float32
+	aggregateMaxEvents         int
+	aggregateIntervalInSeconds int
+}
+
+func NewDefaultEventCorrelatorOptions() *EventCorrelatorOptions {
+	return &EventCorrelatorOptions{
+		cacheSize:                  maxLruCacheEntries,
+		spamBurst:                  defaultSpamBurst,
+		spamQPS:                    defaultSpamQPS,
+		aggregateMaxEvents:         defaultAggregateMaxEvents,
+		aggregateIntervalInSeconds: defaultAggregateIntervalInSeconds,
+	}
+}
+
 // NewEventCorrelator returns an EventCorrelator configured with default values.
 //
 // The EventCorrelator is responsible for event filtering, aggregating, and counting
@@ -431,20 +449,19 @@ type EventCorrelateResult struct {
 //     times.
 //   * A source may burst 25 events about an object, but has a refill rate budget
 //     per object of 1 event every 5 minutes to control long-tail of spam.
-func NewEventCorrelator(clock clock.Clock) *EventCorrelator {
-	cacheSize := maxLruCacheEntries
-	spamFilter := NewEventSourceObjectSpamFilter(cacheSize, defaultSpamBurst, defaultSpamQPS, clock)
+func NewEventCorrelator(clock clock.Clock, opts *EventCorrelatorOptions) *EventCorrelator {
+	spamFilter := NewEventSourceObjectSpamFilter(opts.cacheSize, opts.spamBurst, opts.spamQPS, clock)
 	return &EventCorrelator{
 		filterFunc: spamFilter.Filter,
 		aggregator: NewEventAggregator(
-			cacheSize,
+			opts.cacheSize,
 			EventAggregatorByReasonFunc,
 			EventAggregatorByReasonMessageFunc,
-			defaultAggregateMaxEvents,
-			defaultAggregateIntervalInSeconds,
+			opts.aggregateMaxEvents,
+			opts.aggregateIntervalInSeconds,
 			clock),
 
-		logger: newEventLogger(cacheSize, clock),
+		logger: newEventLogger(opts.cacheSize, clock),
 	}
 }
 

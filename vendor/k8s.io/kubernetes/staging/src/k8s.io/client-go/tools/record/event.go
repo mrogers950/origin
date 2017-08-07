@@ -84,6 +84,7 @@ type EventBroadcaster interface {
 	// StartRecordingToSink starts sending events received from this EventBroadcaster to the given
 	// sink. The return value can be ignored or used to stop recording, if desired.
 	StartRecordingToSink(sink EventSink) watch.Interface
+	StartRecordingToLimitedSink(sink EventSink) watch.Interface
 
 	// StartLogging starts sending events received from this EventBroadcaster to the given logging
 	// function. The return value can be ignored or used to stop recording, if desired.
@@ -112,13 +113,28 @@ type eventBroadcasterImpl struct {
 // The return value can be ignored or used to stop recording, if desired.
 // TODO: make me an object with parameterizable queue length and retry interval
 func (eventBroadcaster *eventBroadcasterImpl) StartRecordingToSink(sink EventSink) watch.Interface {
+	eventCorrelator := NewEventCorrelator(clock.RealClock{}, NewDefaultEventCorrelatorOptions())
+	return eventBroadcaster.setupSink(sink, eventCorrelator)
+}
+
+func (eventBroadcaster *eventBroadcasterImpl) StartRecordingToLimitedSink(sink EventSink) watch.Interface {
+	correlatorOptions := NewDefaultEventCorrelatorOptions()
+
+	// 1 new event every minute
+	correlatorOptions.spamBurst = 1
+	correlatorOptions.spamQPS = 1. / 60.
+
+	eventCorrelator := NewEventCorrelator(clock.RealClock{}, correlatorOptions)
+	return eventBroadcaster.setupSink(sink, eventCorrelator)
+}
+
+func (eventBroadcaster *eventBroadcasterImpl) setupSink(sink EventSink, correlator *EventCorrelator) watch.Interface {
 	// The default math/rand package functions aren't thread safe, so create a
 	// new Rand object for each StartRecording call.
 	randGen := rand.New(rand.NewSource(time.Now().UnixNano()))
-	eventCorrelator := NewEventCorrelator(clock.RealClock{})
 	return eventBroadcaster.StartEventWatcher(
 		func(event *v1.Event) {
-			recordToSink(sink, event, eventCorrelator, randGen, eventBroadcaster.sleepDuration)
+			recordToSink(sink, event, correlator, randGen, eventBroadcaster.sleepDuration)
 		})
 }
 
