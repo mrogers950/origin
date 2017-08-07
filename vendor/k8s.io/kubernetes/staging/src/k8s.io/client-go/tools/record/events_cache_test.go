@@ -182,6 +182,7 @@ func TestEventCorrelator(t *testing.T) {
 		expectedEvent   v1.Event
 		intervalSeconds int
 		expectedSkip    bool
+		hardLimit       bool
 	}{
 		"create-a-single-event": {
 			previousEvents:  []v1.Event{},
@@ -206,6 +207,34 @@ func TestEventCorrelator(t *testing.T) {
 			newEvent:        duplicateEvent,
 			expectedSkip:    true,
 			intervalSeconds: 1,
+		},
+		"the-same-event-is-spam-under-one-minute-with-hard-limit": {
+			previousEvents:  makeEvents(1, duplicateEvent),
+			newEvent:        duplicateEvent,
+			hardLimit:       true,
+			expectedSkip:    true,
+			intervalSeconds: 1,
+		},
+		"similar-event-is-spam-under-one-minute-with-hard-limit": {
+			previousEvents:  makeEvents(1, similarEvent),
+			newEvent:        similarEvent,
+			hardLimit:       true,
+			expectedSkip:    true,
+			intervalSeconds: 1,
+		},
+		"the-same-event-is-not-spam-after-minute-with-hard-limit": {
+			previousEvents:  makeEvents(1, duplicateEvent),
+			newEvent:        duplicateEvent,
+			expectedEvent:   setCount(duplicateEvent, 2),
+			hardLimit:       true,
+			intervalSeconds: 15, // This ends up being slightly more than 1min
+		},
+		"similar-event-is-not-spam-after-minute-with-hard-limit": {
+			previousEvents:  makeEvents(1, similarEvent),
+			newEvent:        similarEvent,
+			expectedEvent:   setCount(similarEvent, 2),
+			hardLimit:       true,
+			intervalSeconds: 15, // This ends up being slightly more than 1min
 		},
 		"create-many-unique-events": {
 			previousEvents:  makeUniqueEvents(30),
@@ -240,9 +269,16 @@ func TestEventCorrelator(t *testing.T) {
 	}
 
 	for testScenario, testInput := range scenario {
+		var correlator *EventCorrelator
+
 		eventInterval := time.Duration(testInput.intervalSeconds) * time.Second
 		clock := clock.IntervalClock{Time: time.Now(), Duration: eventInterval}
-		correlator := NewEventCorrelator(&clock)
+		correlatorOpt := NewDefaultEventCorrelatorOptions()
+		if testInput.hardLimit {
+			correlatorOpt.SpamBurst = 1
+			correlatorOpt.SpamQPS = 1. / 60.
+		}
+		correlator = NewEventCorrelator(&clock, correlatorOpt)
 		for i := range testInput.previousEvents {
 			event := testInput.previousEvents[i]
 			now := metav1.NewTime(clock.Now())
