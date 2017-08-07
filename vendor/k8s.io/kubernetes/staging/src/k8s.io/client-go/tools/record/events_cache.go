@@ -47,6 +47,10 @@ const (
 	// unhealthy
 	defaultSpamBurst = 25
 	defaultSpamQPS   = 1. / 300.
+
+	// for 1 new event every minute
+	hardLimitSpamBurst = 1
+	hardLimitSpamQPS   = 1. / 60.
 )
 
 // getEventKey builds unique event key based on source, involvedObject, reason, message
@@ -434,6 +438,24 @@ type EventCorrelateResult struct {
 func NewEventCorrelator(clock clock.Clock) *EventCorrelator {
 	cacheSize := maxLruCacheEntries
 	spamFilter := NewEventSourceObjectSpamFilter(cacheSize, defaultSpamBurst, defaultSpamQPS, clock)
+	return &EventCorrelator{
+		filterFunc: spamFilter.Filter,
+		aggregator: NewEventAggregator(
+			cacheSize,
+			EventAggregatorByReasonFunc,
+			EventAggregatorByReasonMessageFunc,
+			defaultAggregateMaxEvents,
+			defaultAggregateIntervalInSeconds,
+			clock),
+
+		logger: newEventLogger(cacheSize, clock),
+	}
+}
+
+// Returns an EventCorrelator that restricts a source to 1 event per minute.
+func NewEventCorrelatorLimited(clock clock.Clock) *EventCorrelator {
+	cacheSize := maxLruCacheEntries
+	spamFilter := NewEventSourceObjectSpamFilter(cacheSize, hardLimitSpamBurst, hardLimitSpamQPS, clock)
 	return &EventCorrelator{
 		filterFunc: spamFilter.Filter,
 		aggregator: NewEventAggregator(
