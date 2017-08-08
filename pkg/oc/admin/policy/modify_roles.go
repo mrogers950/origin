@@ -336,47 +336,60 @@ func (o *RoleModificationOptions) Complete(f *clientcmd.Factory, args []string, 
 	return nil
 }
 
+func (o *RoleModificationOptions) getUserSpecifiedBinding() (*authorizationapi.RoleBinding, bool /*isUpdate*/, error) {
+	// Look for an existing rolebinding by name.
+	roleBinding, err := o.RoleBindingAccessor.GetRoleBinding(o.RoleBindingName)
+	if err != nil && !kapierrors.IsNotFound(err) {
+		return nil, false, err
+	}
+	if (err != nil && kapierrors.IsNotFound(err)) || roleBinding == nil {
+		// Create a new rolebinding with the desired name.
+		roleBinding = &authorizationapi.RoleBinding{}
+		roleBinding.Name = o.RoleBindingName
+		return roleBinding, false, nil
+	}
+
+	// Check that we update the rolebinding for the correct role.
+	if roleBinding.RoleRef.Name != o.RoleName || roleBinding.RoleRef.Namespace != o.RoleNamespace {
+		return nil, false, fmt.Errorf("rolebinding %s found for role %s, not %s", roleBinding.Name, roleBinding.RoleRef.Name, o.RoleName)
+	}
+	return roleBinding, true, nil
+}
+
+func (o *RoleModificationOptions) getUnspecifiedBinding() (*authorizationapi.RoleBinding, bool /*isUpdate*/, error) {
+	// Look for existing bindings by role.
+	roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if len(roleBindings) > 0 {
+		// only need to add the user or group to a single roleBinding on the role.  Just choose the first one
+		return roleBindings[0], true, nil
+	}
+
+	// Create a new rolebinding with the default naming.
+	roleBinding := &authorizationapi.RoleBinding{}
+	roleBindingNames, err := o.RoleBindingAccessor.GetExistingRoleBindingNames()
+	if err != nil {
+		return nil, false, err
+	}
+	roleBinding.Name = getUniqueName(o.RoleName, roleBindingNames)
+	return roleBinding, false, nil
+}
+
 func (o *RoleModificationOptions) AddRole() error {
 	var roleBinding *authorizationapi.RoleBinding
 	var err error
 	isUpdate := false
 	if len(o.RoleBindingName) > 0 {
-		// Look for an existing rolebinding by name.
-		roleBinding, err = o.RoleBindingAccessor.GetRoleBinding(o.RoleBindingName)
-		if err != nil && !kapierrors.IsNotFound(err) {
-			return err
-		}
-		if !kapierrors.IsNotFound(err) && roleBinding != nil {
-			// Check that we update the rolebinding for the correct role.
-			if roleBinding.RoleRef.Name != o.RoleName || roleBinding.RoleRef.Namespace != o.RoleNamespace {
-				return fmt.Errorf("rolebinding %s found for role %s, not %s", roleBinding.Name, roleBinding.RoleRef.Name, o.RoleName)
-			}
-			isUpdate = true
-		} else {
-			// Create a new rolebinding with the desired name.
-			roleBinding = &authorizationapi.RoleBinding{}
-			roleBinding.Name = o.RoleBindingName
-		}
+		roleBinding, isUpdate, err = o.getUserSpecifiedBinding()
 	} else {
-		// Look for existing bindings by role.
-		roleBindings, err := o.RoleBindingAccessor.GetExistingRoleBindingsForRole(o.RoleNamespace, o.RoleName)
-		if err != nil {
-			return err
-		}
+		roleBinding, isUpdate, err = o.getUnspecifiedBinding()
+	}
 
-		if len(roleBindings) > 0 {
-			// only need to add the user or group to a single roleBinding on the role.  Just choose the first one
-			roleBinding = roleBindings[0]
-			isUpdate = true
-		} else {
-			// Create a new rolebinding with the default naming.
-			roleBinding = &authorizationapi.RoleBinding{}
-			roleBindingNames, err := o.RoleBindingAccessor.GetExistingRoleBindingNames()
-			if err != nil {
-				return err
-			}
-			roleBinding.Name = getUniqueName(o.RoleName, roleBindingNames)
-		}
+	if err != nil {
+		return err
 	}
 
 	roleBinding.RoleRef.Namespace = o.RoleNamespace

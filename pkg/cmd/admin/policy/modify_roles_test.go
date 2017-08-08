@@ -233,11 +233,9 @@ func TestModifyRoleBindingName(t *testing.T) {
 			t.Errorf("%s: unexpected err %v", tcName, err)
 		}
 
-		var expectedName string
+		expectedName := tc.role
 		if len(tc.rolebindingname) > 0 {
 			expectedName = tc.rolebindingname
-		} else {
-			expectedName = tc.role
 		}
 
 		if tc.clusterTest {
