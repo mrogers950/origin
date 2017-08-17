@@ -25,6 +25,7 @@ import (
 	kuser "k8s.io/apiserver/pkg/authentication/user"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/kubernetes/pkg/client/retry"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"github.com/openshift/origin/pkg/auth/authenticator/challenger/passwordchallenger"
 	"github.com/openshift/origin/pkg/auth/authenticator/challenger/placeholderchallenger"
@@ -92,7 +93,15 @@ func (c *OAuthServerConfig) WithOAuth(handler http.Handler) (http.Handler, error
 		return nil, err
 	}
 	clientRegistry := clientregistry.NewRegistry(clientStorage)
-	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(c.KubeClient.Core(), c.KubeClient.Core(), c.OpenShiftClient, clientRegistry, oauthapi.GrantHandlerType(c.Options.GrantConfig.ServiceAccountMethod))
+	combinedOAuthClientGetter := saoauth.NewServiceAccountOAuthClientGetter(
+		c.KubeClient.Core(),
+		c.KubeClient.Core(),
+		// TODO: simplify this construction
+		corev1.New(c.KubeExternalClient.Core().RESTClient()).Events(""),
+		c.OpenShiftClient,
+		clientRegistry,
+		oauthapi.GrantHandlerType(c.Options.GrantConfig.ServiceAccountMethod),
+	)
 
 	accessTokenStorage, err := accesstokenetcd.NewREST(c.RESTOptionsGetter, combinedOAuthClientGetter, c.EtcdBackends...)
 	if err != nil {

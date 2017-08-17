@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/rest"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kclientsetexternal "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
 	"github.com/openshift/origin/pkg/auth/server/session"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -35,6 +36,9 @@ type OAuthServerConfig struct {
 
 	// KubeClient is kubeclient with enough permission for the auth API
 	KubeClient kclientset.Interface
+
+	// KubeExternalClient is for creating user events
+	KubeExternalClient kclientsetexternal.Interface
 
 	// OpenShiftClient is osclient with enough permission for the auth API
 	OpenShiftClient osclient.Interface
