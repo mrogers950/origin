@@ -1,0 +1,49 @@
+~ Authentication of incoming requests to the Ansible Service Broker
+
+Clients of the ASB:
+    * Service Catalog
+        - For normal operations, Service Catalog is the only entity which will be
+          authorized to send requests to the broker
+    * Developer Tooling
+        - An APB author may want to use the apb tool to update the reference of
+          APB specs in Broker to test local APBs. These use specially configured
+          routes.
+
+Authentication Mechanisms:
+ * BasicAuth is currently implemented in the service broker code;
+    1. A secret is created in the broker namespace containing the username/password
+    2. A broker resource is created and sets "basic" referencing prior to created
+       secret.
+    3. The Service Catalog sends Basic Auth info on each request and the broker
+       validates the request based on the secret.
+ * Bearer Token
+    * Shared Secret methods;
+      1. A service account is created purely for authentication purposes, ie.
+         'sb-auth-sa'. Alternately, use the Kube SA token secret for the SA
+         associated with the broker.
+      2. A secret is created in the broker's namespace with the desired SA token.
+      3. A broker resource is created and sets the secret reference for "bearer"
+      4. The service catalog sends Bearer Token Auth and the broker validates
+         based on the secret.
+    * Delegated Authentication workflow;
+      1. The broker registers an endpoint and integrates with the aggregated API
+         server.
+      2. A role is defined with the desired permissions for accessing the endpoint
+         resource.
+      3. A service account is created and granted the previous role.
+      4. A secret is created with the SA token.
+      5. A broker resource is created referencing the secret.
+      6. The Service Catalog uses the token from the secret in its requests.
+      7. The API server is then in charge of enforcing policy wrt requests being
+         allowed on the endpoint. The broker does not do authn/authz itself.
+         ?. Is this Bearer Token value in the request from the service catalog
+            using the token from the secret or Service Catalog's own SA token?
+
+TLS:
+* Ansible Service Broker uses a SSL cert injected as a secret from:
+  https://docs.openshift.com/online/dev_guide/secrets.html#service-serving-certificate-secrets
+* Example of OpenShift Template deploying ASB and how it is using the
+  Service Serving Certificate Secrets:
+  https://github.com/openshift/ansible-service-broker/blob/master/templates/deploy-ansible-service-broker.template.yaml#L14
+* openshift-ansible based installs will be updated in 3.7 to do similar (not yet done):
+  https://github.com/openshift/openshift-ansible/blob/master/roles/ansible_service_broker/tasks/install.yml
