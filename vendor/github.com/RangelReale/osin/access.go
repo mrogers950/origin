@@ -117,11 +117,13 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 		if !s.Config.AllowGetAccessRequest {
 			w.SetError(E_INVALID_REQUEST, "")
 			w.InternalError = errors.New("Request must be POST")
+			s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", "Request must be POST")
 			return nil
 		}
 	} else if r.Method != "POST" {
 		w.SetError(E_INVALID_REQUEST, "")
 		w.InternalError = errors.New("Request must be POST")
+		s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", "Request must be POST")
 		return nil
 	}
 
@@ -129,6 +131,7 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 	if err != nil {
 		w.SetError(E_INVALID_REQUEST, "")
 		w.InternalError = err
+		s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", err.Error())
 		return nil
 	}
 
@@ -149,6 +152,7 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 	}
 
 	w.SetError(E_UNSUPPORTED_GRANT_TYPE, "")
+	s.Logger.Log("error", E_UNSUPPORTED_GRANT_TYPE)
 	return nil
 }
 
@@ -173,11 +177,13 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 	// "code" is required
 	if ret.Code == "" {
 		w.SetError(E_INVALID_GRANT, "")
+		s.Logger.Log("error", E_INVALID_GRANT)
 		return nil
 	}
 
 	// must have a valid client
-	if ret.Client = getClient(auth, w.Storage, w); ret.Client == nil {
+	if ret.Client = s.getClient(auth, w.Storage, w); ret.Client == nil {
+		s.Logger.Log("must have a valid client")
 		return nil
 	}
 
@@ -187,28 +193,34 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 	if err != nil {
 		w.SetError(E_INVALID_GRANT, "")
 		w.InternalError = err
+		s.Logger.Log("error", E_INVALID_GRANT, "internal_error", err.Error())
 		return nil
 	}
 	if ret.AuthorizeData == nil {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT, "internal_error", "AuthorizeData is nil")
 		return nil
 	}
 	if ret.AuthorizeData.Client == nil {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT, "internal_error", "AuthorizeData client is nil")
 		return nil
 	}
 	if ret.AuthorizeData.Client.GetRedirectUri() == "" {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT, "internal_error", "client redirect uri is empty")
 		return nil
 	}
 	if ret.AuthorizeData.IsExpiredAt(s.Now()) {
 		w.SetError(E_INVALID_GRANT, "")
+		s.Logger.Log("error", E_INVALID_GRANT, "internal_error", "authorize data is expired")
 		return nil
 	}
 
 	// code must be from the client
 	if ret.AuthorizeData.Client.GetId() != ret.Client.GetId() {
 		w.SetError(E_INVALID_GRANT, "")
+		s.Logger.Log("error", E_INVALID_GRANT, "internal_error", "code must be from the client") // what err?
 		return nil
 	}
 
@@ -219,11 +231,13 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 	if err = ValidateUriList(ret.Client.GetRedirectUri(), ret.RedirectUri, s.Config.RedirectUriSeparator); err != nil {
 		w.SetError(E_INVALID_REQUEST, "")
 		w.InternalError = err
+		s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", err.Error())
 		return nil
 	}
 	if ret.AuthorizeData.RedirectUri != ret.RedirectUri {
 		w.SetError(E_INVALID_REQUEST, "")
 		w.InternalError = errors.New("Redirect uri is different")
+		s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", w.InternalError.Error())
 		return nil
 	}
 
@@ -233,6 +247,7 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 		if matched := pkceMatcher.MatchString(ret.CodeVerifier); !matched {
 			w.SetError(E_INVALID_REQUEST, "code_verifier invalid (rfc7636)")
 			w.InternalError = errors.New("code_verifier has invalid format")
+			s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", w.InternalError.Error())
 			return nil
 		}
 
@@ -246,11 +261,13 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 			codeVerifier = base64.RawURLEncoding.EncodeToString(hash[:])
 		default:
 			w.SetError(E_INVALID_REQUEST, "code_challenge_method transform algorithm not supported (rfc7636)")
+			s.Logger.Log("error", E_INVALID_REQUEST, "internal_error", "code_challenge_method transform algorithm not supported (rfc7636)")
 			return nil
 		}
 		if codeVerifier != ret.AuthorizeData.CodeChallenge {
 			w.SetError(E_INVALID_GRANT, "code_verifier invalid (rfc7636)")
 			w.InternalError = errors.New("code_verifier failed comparison with code_challenge")
+			s.Logger.Log("error", E_INVALID_GRANT, "internal_error", w.InternalError.Error())
 			return nil
 		}
 	}
@@ -310,7 +327,7 @@ func (s *Server) handleRefreshTokenRequest(w *Response, r *http.Request) *Access
 	}
 
 	// must have a valid client
-	if ret.Client = getClient(auth, w.Storage, w); ret.Client == nil {
+	if ret.Client = s.getClient(auth, w.Storage, w); ret.Client == nil {
 		return nil
 	}
 
@@ -384,7 +401,7 @@ func (s *Server) handlePasswordRequest(w *Response, r *http.Request) *AccessRequ
 	}
 
 	// must have a valid client
-	if ret.Client = getClient(auth, w.Storage, w); ret.Client == nil {
+	if ret.Client = s.getClient(auth, w.Storage, w); ret.Client == nil {
 		return nil
 	}
 
@@ -411,7 +428,7 @@ func (s *Server) handleClientCredentialsRequest(w *Response, r *http.Request) *A
 	}
 
 	// must have a valid client
-	if ret.Client = getClient(auth, w.Storage, w); ret.Client == nil {
+	if ret.Client = s.getClient(auth, w.Storage, w); ret.Client == nil {
 		return nil
 	}
 
@@ -442,11 +459,12 @@ func (s *Server) handleAssertionRequest(w *Response, r *http.Request) *AccessReq
 	// "assertion_type" and "assertion" is required
 	if ret.AssertionType == "" || ret.Assertion == "" {
 		w.SetError(E_INVALID_GRANT, "")
+		s.Logger.Log("error", E_INVALID_GRANT)
 		return nil
 	}
 
 	// must have a valid client
-	if ret.Client = getClient(auth, w.Storage, w); ret.Client == nil {
+	if ret.Client = s.getClient(auth, w.Storage, w); ret.Client == nil {
 		return nil
 	}
 
@@ -498,6 +516,7 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 		if err = w.Storage.SaveAccess(ret); err != nil {
 			w.SetError(E_SERVER_ERROR, "")
 			w.InternalError = err
+			s.Logger.Log("error", E_SERVER_ERROR, "internal_error", err.Error())
 			return
 		}
 
@@ -526,6 +545,7 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 		}
 	} else {
 		w.SetError(E_ACCESS_DENIED, "")
+		s.Logger.Log("error", E_ACCESS_DENIED)
 	}
 }
 
@@ -533,25 +553,29 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 
 // getClient looks up and authenticates the basic auth using the given
 // storage. Sets an error on the response if auth fails or a server error occurs.
-func getClient(auth *BasicAuth, storage Storage, w *Response) Client {
+func (s Server) getClient(auth *BasicAuth, storage Storage, w *Response) Client {
 	client, err := storage.GetClient(auth.Username)
 	if err != nil {
 		w.SetError(E_SERVER_ERROR, "")
 		w.InternalError = err
+		s.Logger.Log("error", E_SERVER_ERROR, "internal_error", err.Error())
 		return nil
 	}
 	if client == nil {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT)
 		return nil
 	}
 
 	if !CheckClientSecret(client, auth.Password) {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT)
 		return nil
 	}
 
 	if client.GetRedirectUri() == "" {
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
+		s.Logger.Log("error", E_UNAUTHORIZED_CLIENT)
 		return nil
 	}
 	return client

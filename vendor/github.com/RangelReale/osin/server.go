@@ -1,8 +1,20 @@
 package osin
 
 import (
+	"github.com/golang/glog"
 	"time"
 )
+
+type Logger interface {
+	Log(keyval ...interface{})
+}
+
+type LoggerDefault struct {
+}
+
+func (l LoggerDefault) Log(keyval ...interface{}) {
+	glog.ErrorDepth(1, keyval)
+}
 
 // Server is an OAuth2 implementation
 type Server struct {
@@ -11,6 +23,7 @@ type Server struct {
 	AuthorizeTokenGen AuthorizeTokenGen
 	AccessTokenGen    AccessTokenGen
 	Now               func() time.Time
+	Logger            Logger
 }
 
 // NewServer creates a new server instance
@@ -21,6 +34,7 @@ func NewServer(config *ServerConfig, storage Storage) *Server {
 		AuthorizeTokenGen: &AuthorizeTokenGenDefault{},
 		AccessTokenGen:    &AccessTokenGenDefault{},
 		Now:               time.Now,
+		Logger:            &LoggerDefault{},
 	}
 }
 
