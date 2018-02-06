@@ -408,13 +408,26 @@ func GetCA(certFile, keyFile, serialFile string) (*CA, error) {
 	}, nil
 }
 
+// MakeCACSR creates a keypair and CSR written to csrFile
+func MakeCACSR(csrFile, keyFile, name string) error {
+	glog.V(2).Infof("Generating new CA CSR for %s, and key in %s, %s", name, csrFile, keyFile)
+	rootcaPublicKey, rootcaPrivateKey, err := NewKeyPair()
+	if err != nil {
+		return err
+	}
+	newSigningCertificateCSRTemplate(rootcaPrivateKey, name)
+}
+
 // if serialFile is empty, a RandomSerialGenerator will be used
-func MakeCA(certFile, keyFile, serialFile, name string, expireDays int) (*CA, error) {
+func MakeCA(certFile, keyFile, serialFile, name string, expireDays int, csrOnly bool) (*CA, error) {
 	glog.V(2).Infof("Generating new CA for %s cert, and key in %s, %s", name, certFile, keyFile)
 	// Create CA cert
 	rootcaPublicKey, rootcaPrivateKey, err := NewKeyPair()
 	if err != nil {
 		return nil, err
+	}
+	if csrOnly {
+		newSigningCertificateCSR(rootcaPrivateKey, name)
 	}
 	rootcaTemplate := newSigningCertificateTemplate(pkix.Name{CommonName: name}, expireDays, time.Now)
 	rootcaCert, err := signCertificate(rootcaTemplate, rootcaPublicKey, rootcaTemplate, rootcaPrivateKey)
@@ -582,6 +595,17 @@ func NewKeyPair() (crypto.PublicKey, crypto.PrivateKey, error) {
 		return nil, nil, err
 	}
 	return &privateKey.PublicKey, privateKey, nil
+}
+
+func newSigningCertificateCSR(key crypto.PrivateKey, cn string) ([]byte, error) {
+	req := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: cn},
+	}
+	csrTemplate, err := x509.CreateCertificateRequest(rand.Reader, req, key)
+	if err != nil {
+		return nil, err
+	}
+	return csrTemplate, nil
 }
 
 // Can be used for CA or intermediate signing certs
