@@ -107,7 +107,6 @@ func NewCmdReconcileClusterRoleBindings(name, fullName string, f *clientcmd.Fact
 				kcmdutil.CheckErr(err)
 			}
 		},
-		Deprecated: "use 'oc auth reconcile'",
 	}
 
 	cmd.Flags().BoolVar(&o.Confirmed, "confirm", o.Confirmed, "If true, specify that cluster role bindings should be modified. Defaults to false, displaying what would be replaced but not actually replacing anything.")
