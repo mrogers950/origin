@@ -75,10 +75,21 @@ func newWebConsoleProxy(kubeInformers informers.SharedInformerFactory, kubeAPISe
 	if err != nil {
 		return nil, err
 	}
-	proxyHandler, err := newServiceProxyHandler("webconsole", "openshift-web-console", aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()), caBundle, "OpenShift web console")
-	if err != nil {
-		return nil, err
+
+	proxyRoundTripper := &serviceCABundleRoundTripper{
+		serverName: "webconsole.openshift-web-console.svc",
+		handlerCA:  caBundle,
+		lister:     kubeInformers.Core().V1().ConfigMaps().Lister(),
 	}
+
+	proxyHandler := &serviceProxyHandler{
+		serviceName:            "webconsole",
+		serviceNamespace:       "openshift-web-console",
+		serviceResolver:        aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()),
+		applicationDisplayName: "OpenShift web console",
+		proxyRoundTripper:      proxyRoundTripper,
+	}
+
 	return proxyHandler, nil
 }
 
