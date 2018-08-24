@@ -92,6 +92,24 @@ type serviceProxyHandler struct {
 	clientConfig *restclient.Config
 }
 
+type caUpdater struct {
+	rt           http.RoundTripper
+	restConfig   *restclient.Config
+	clientConfig *restclient.Config
+}
+
+func (r *caUpdater) RoundTrip(req *http.Request) (*http.Response, error) {
+	glog.Infof("DBG: caUpdater RoundTrip: calling regular roundtrip 2")
+	resp, err := r.rt.RoundTrip(req)
+	if err != nil {
+		glog.Infof("DBG: caUpdater RoundTrip: got err %v", err)
+		if resp != nil {
+			glog.Infof("DBG: caUpdater RoundTrip: got err status %s, statuscode %v", resp.Status, resp.StatusCode)
+		}
+	}
+	return resp, err
+}
+
 // newServiceProxyHandler is a simple proxy that doesn't handle upgrades, passes headers directly through, and doesn't assert any identity.
 func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string, serviceNamespace string, serviceResolver ServiceResolver, caBundle []byte, applicationDisplayName string) (*serviceProxyHandler, error) {
 	restConfig := &restclient.Config{
@@ -105,12 +123,18 @@ func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string,
 		return nil, err
 	}
 
+	caRoundTripper := &caUpdater{
+		rt:           proxyRoundTripper,
+		restConfig:   restConfig,
+		clientConfig: clientConfig,
+	}
+
 	return &serviceProxyHandler{
 		serviceName:            serviceName,
 		serviceNamespace:       serviceNamespace,
 		serviceResolver:        serviceResolver,
 		applicationDisplayName: applicationDisplayName,
-		proxyRoundTripper:      proxyRoundTripper,
+		proxyRoundTripper:      caRoundTripper,
 		restConfig:             restConfig,
 		clientConfig:           clientConfig,
 	}, nil
@@ -147,26 +171,29 @@ func (r *serviceProxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request
 	newReq.URL = location
 
 	// Append the signing CA bundle
-	glog.Infof("DBG: serviceProxyHandler ServeHTTP: going to append bundle")
 	proxyRoundTripper := r.proxyRoundTripper
-	newCAbundle := getSigningCAbundle(r.clientConfig)
-	if len(newCAbundle) > 0 {
-		glog.Infof("DBG: serviceProxyHandler ServeHTTP: got new CA bundle to combine")
-		combinedBundle := append(r.restConfig.CAData, []byte(newCAbundle)...)
-		newRestConfig := &restclient.Config{
-			TLSClientConfig: restclient.TLSClientConfig{
-				ServerName: r.restConfig.ServerName,
-				CAData:     combinedBundle,
-			},
-		}
 
-		rt, err := restclient.TransportFor(newRestConfig)
-		if err == nil {
-			glog.Infof("DBG: serviceProxyHandler ServeHTTP: OK, replace transport")
-			proxyRoundTripper = rt
-		}
-	}
+	/*
+		glog.Infof("DBG: serviceProxyHandler ServeHTTP: going to append bundle")
+		proxyRoundTripper := r.proxyRoundTripper
+		newCAbundle := getSigningCAbundle(r.clientConfig)
+		if len(newCAbundle) > 0 {
+			glog.Infof("DBG: serviceProxyHandler ServeHTTP: got new CA bundle to combine")
+			combinedBundle := append(r.restConfig.CAData, []byte(newCAbundle)...)
+			newRestConfig := &restclient.Config{
+				TLSClientConfig: restclient.TLSClientConfig{
+					ServerName: r.restConfig.ServerName,
+					CAData:     combinedBundle,
+				},
+			}
 
+			rt, err := restclient.TransportFor(newRestConfig)
+			if err == nil {
+				glog.Infof("DBG: serviceProxyHandler ServeHTTP: OK, replace transport")
+				proxyRoundTripper = rt
+			}
+		}
+	*/
 	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, false, false, &responder{w: w})
 	handler.ServeHTTP(w, newReq)
 }
