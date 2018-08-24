@@ -101,10 +101,25 @@ type caUpdater struct {
 func (r *caUpdater) RoundTrip(req *http.Request) (*http.Response, error) {
 	glog.Infof("DBG: caUpdater RoundTrip: calling regular roundtrip 2")
 	resp, err := r.rt.RoundTrip(req)
-	if err != nil {
+	if err != nil && err.Error() == "x509: certificate signed by unknown authority" {
 		glog.Infof("DBG: caUpdater RoundTrip: got err %v", err)
-		if resp != nil {
-			glog.Infof("DBG: caUpdater RoundTrip: got err status %s, statuscode %v", resp.Status, resp.StatusCode)
+
+		newCAbundle := getSigningCAbundle(r.clientConfig)
+		if len(newCAbundle) > 0 {
+			glog.Infof("DBG: serviceProxyHandler ServeHTTP: got new CA bundle to combine")
+			combinedBundle := append(r.restConfig.CAData, []byte(newCAbundle)...)
+			newRestConfig := &restclient.Config{
+				TLSClientConfig: restclient.TLSClientConfig{
+					ServerName: r.restConfig.ServerName,
+					CAData:     combinedBundle,
+				},
+			}
+
+			rt, err := restclient.TransportFor(newRestConfig)
+			if err != nil {
+				return nil, err
+			}
+			return rt.RoundTrip(req)
 		}
 	}
 	return resp, err
