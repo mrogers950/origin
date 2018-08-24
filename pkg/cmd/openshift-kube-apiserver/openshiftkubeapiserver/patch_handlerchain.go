@@ -14,7 +14,6 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/informers"
 	aggregatorapiserver "k8s.io/kube-aggregator/pkg/apiserver"
-	"k8s.io/kubernetes/staging/src/k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -70,16 +69,20 @@ func newWebConsoleProxy(genericConfig *genericapiserver.Config, kubeInformers in
 
 	glog.Infof("DBG: starting with caBundle %s", spew.Sprint(caBundle))
 	// Tack on the CA bundle used by the openshift-service-cert-signer in order to trust the webconsole service cert.
-	cm, err := kubeInformers.Core().V1().ConfigMaps().Lister().ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle")
-	if err != nil && !errors.IsNotFound(err) {
-		glog.Infof("DBG: error getting signing-cabundle %v", err)
-		return nil, err
-	}
-	if cm != nil {
-		bundle := cm.Data["cabundle.crt"]
-		if len(bundle) > 0 {
-			caBundle = append(caBundle, []byte(bundle)...)
-		}
+	bundle := getSigningCAbundle(genericConfig.LoopbackClientConfig)
+	//cm, err := kubeInformers.Core().V1().ConfigMaps().Lister().ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle")
+	//if err != nil && !errors.IsNotFound(err) {
+	//	glog.Infof("DBG: error getting signing-cabundle %v", err)
+	//	return nil, err
+	//}
+	//if cm != nil {
+	//	bundle := cm.Data["cabundle.crt"]
+	//	if len(bundle) > 0 {
+	//		caBundle = append(caBundle, []byte(bundle)...)
+	//	}
+	//}
+	if len(bundle) > 0 {
+		caBundle = append(caBundle, []byte(bundle)...)
 	}
 	glog.Infof("DBG: ending with caBundle %s", spew.Sprint(caBundle))
 

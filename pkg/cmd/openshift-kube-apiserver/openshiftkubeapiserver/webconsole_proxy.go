@@ -102,6 +102,19 @@ func (a *webConsolePublicURLAccessor) getPublicConsoleURL() string {
 	return a.updatePublicConsoleURL()
 }
 
+func getSigningCAbundle(config *rest.Config) string {
+	client := coreclientv1.NewForConfigOrDie(config)
+	configMap, err := client.ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle", metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	bundle, ok := configMap.Data["cabundle.crt"]
+	if !ok {
+		return ""
+	}
+	return bundle
+}
+
 func (a *webConsolePublicURLAccessor) updatePublicConsoleURL() string {
 	// TODO: best effort ratelimit maybe
 	configMap, err := a.configMapGetter.ConfigMaps("openshift-web-console").Get("webconsole-config", metav1.GetOptions{})
