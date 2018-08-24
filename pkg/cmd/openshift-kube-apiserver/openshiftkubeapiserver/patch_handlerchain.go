@@ -6,7 +6,6 @@ import (
 
 	"io/ioutil"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/glog"
 	"github.com/openshift/origin/pkg/cmd/openshift-apiserver/openshiftapiserver/configprocessing"
 	configapi "github.com/openshift/origin/pkg/cmd/server/apis/config"
@@ -67,9 +66,9 @@ func newWebConsoleProxy(genericConfig *genericapiserver.Config, kubeInformers in
 		return nil, err
 	}
 
-	glog.Infof("DBG: starting with caBundle %s", spew.Sprint(caBundle))
+	//glog.Infof("DBG: starting with caBundle %s", spew.Sprint(caBundle))
 	// Tack on the CA bundle used by the openshift-service-cert-signer in order to trust the webconsole service cert.
-	bundle := getSigningCAbundle(genericConfig.LoopbackClientConfig)
+	//bundle := getSigningCAbundle(genericConfig.LoopbackClientConfig)
 	//cm, err := kubeInformers.Core().V1().ConfigMaps().Lister().ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle")
 	//if err != nil && !errors.IsNotFound(err) {
 	//	glog.Infof("DBG: error getting signing-cabundle %v", err)
@@ -81,12 +80,12 @@ func newWebConsoleProxy(genericConfig *genericapiserver.Config, kubeInformers in
 	//		caBundle = append(caBundle, []byte(bundle)...)
 	//	}
 	//}
-	if len(bundle) > 0 {
-		caBundle = append(caBundle, []byte(bundle)...)
-	}
-	glog.Infof("DBG: ending with caBundle %s", spew.Sprint(caBundle))
+	//if len(bundle) > 0 {
+	//	caBundle = append(caBundle, []byte(bundle)...)
+	//}
+	//glog.Infof("DBG: ending with caBundle %s", spew.Sprint(caBundle))
 
-	proxyHandler, err := newServiceProxyHandler("webconsole", "openshift-web-console", aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()), caBundle, "OpenShift web console")
+	proxyHandler, err := newServiceProxyHandler(genericConfig.LoopbackClientConfig, "webconsole", "openshift-web-console", aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()), caBundle, "OpenShift web console")
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
@@ -87,11 +88,12 @@ type serviceProxyHandler struct {
 	// proxyRoundTripper is the re-useable portion of the transport.  It does not vary with any request.
 	proxyRoundTripper http.RoundTripper
 
-	restConfig *restclient.Config
+	restConfig   *restclient.Config
+	clientConfig *restclient.Config
 }
 
 // newServiceProxyHandler is a simple proxy that doesn't handle upgrades, passes headers directly through, and doesn't assert any identity.
-func newServiceProxyHandler(serviceName string, serviceNamespace string, serviceResolver ServiceResolver, caBundle []byte, applicationDisplayName string) (*serviceProxyHandler, error) {
+func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string, serviceNamespace string, serviceResolver ServiceResolver, caBundle []byte, applicationDisplayName string) (*serviceProxyHandler, error) {
 	restConfig := &restclient.Config{
 		TLSClientConfig: restclient.TLSClientConfig{
 			ServerName: serviceName + "." + serviceNamespace + ".svc",
@@ -110,6 +112,7 @@ func newServiceProxyHandler(serviceName string, serviceNamespace string, service
 		applicationDisplayName: applicationDisplayName,
 		proxyRoundTripper:      proxyRoundTripper,
 		restConfig:             restConfig,
+		clientConfig:           clientConfig,
 	}, nil
 }
 
@@ -143,7 +146,28 @@ func (r *serviceProxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request
 	newReq.Header = utilnet.CloneHeader(req.Header)
 	newReq.URL = location
 
-	handler := proxy.NewUpgradeAwareHandler(location, r.proxyRoundTripper, false, false, &responder{w: w})
+	// Append the signing CA bundle
+	glog.Infof("DBG: serviceProxyHandler ServeHTTP: going to append bundle")
+	proxyRoundTripper := r.proxyRoundTripper
+	newCAbundle := getSigningCAbundle(r.clientConfig)
+	if len(newCAbundle) > 0 {
+		glog.Infof("DBG: serviceProxyHandler ServeHTTP: got new CA bundle to combine")
+		combinedBundle := append(r.restConfig.CAData, []byte(newCAbundle)...)
+		newRestConfig := &restclient.Config{
+			TLSClientConfig: restclient.TLSClientConfig{
+				ServerName: r.restConfig.ServerName,
+				CAData:     combinedBundle,
+			},
+		}
+
+		rt, err := restclient.TransportFor(newRestConfig)
+		if err == nil {
+			glog.Infof("DBG: serviceProxyHandler ServeHTTP: OK, replace transport")
+			proxyRoundTripper = rt
+		}
+	}
+
+	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, false, false, &responder{w: w})
 	handler.ServeHTTP(w, newReq)
 }
 
