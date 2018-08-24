@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	coreclientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 
 	webconsoleconfigv1 "github.com/openshift/api/webconsole/v1"
@@ -102,9 +103,20 @@ func (a *webConsolePublicURLAccessor) getPublicConsoleURL() string {
 	return a.updatePublicConsoleURL()
 }
 
-func getSigningCAbundle(config *rest.Config) string {
-	client := coreclientv1.NewForConfigOrDie(config)
-	configMap, err := client.ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle", metav1.GetOptions{})
+//func getSigningCAbundle(config *rest.Config) string {
+//	client := coreclientv1.NewForConfigOrDie(config)
+//	configMap, err := client.ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle", metav1.GetOptions{})
+//	if err != nil {
+//		return ""
+//	}
+//	bundle, ok := configMap.Data["cabundle.crt"]
+//	if !ok {
+//		return ""
+//	}
+//	return bundle
+//}
+func getSigningCAbundle(configMapLister listersv1.ConfigMapLister) string {
+	configMap, err := configMapLister.ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle")
 	if err != nil {
 		return ""
 	}

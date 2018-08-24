@@ -85,7 +85,7 @@ func newWebConsoleProxy(genericConfig *genericapiserver.Config, kubeInformers in
 	//}
 	//glog.Infof("DBG: ending with caBundle %s", spew.Sprint(caBundle))
 
-	proxyHandler, err := newServiceProxyHandler(genericConfig.LoopbackClientConfig, "webconsole", "openshift-web-console", aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()), caBundle, "OpenShift web console")
+	proxyHandler, err := newServiceProxyHandler(kubeInformers.Core().V1().ConfigMaps().Lister(), "webconsole", "openshift-web-console", aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()), caBundle, "OpenShift web console")
 	if err != nil {
 		return nil, err
 	}

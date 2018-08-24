@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"sync"
+
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/proxy"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
+	listersv1 "k8s.io/client-go/listers/core/v1"
 	restclient "k8s.io/client-go/rest"
 )
 
@@ -93,40 +96,62 @@ type serviceProxyHandler struct {
 }
 
 type caUpdater struct {
-	rt           http.RoundTripper
-	restConfig   *restclient.Config
-	clientConfig *restclient.Config
+	rt              http.RoundTripper
+	serverName      string
+	handlerCA       []byte
+	combinedCA      []byte
+	configMapCALock sync.Mutex
+	lister          listersv1.ConfigMapLister
+}
+
+func runCARoundTrip(req *http.Request, caBundle []byte, serverName string) (*http.Response, error) {
+	newRestConfig := &restclient.Config{
+		TLSClientConfig: restclient.TLSClientConfig{
+			ServerName: serverName,
+			CAData:     caBundle,
+		},
+	}
+
+	rt, err := restclient.TransportFor(newRestConfig)
+	if err != nil {
+		return nil, err
+	}
+	return rt.RoundTrip(req)
 }
 
 func (r *caUpdater) RoundTrip(req *http.Request) (*http.Response, error) {
-	glog.Infof("DBG: caUpdater RoundTrip: calling regular roundtrip 2")
+	glog.Infof("DBG: caUpdater RoundTrip: calling regular roundtrip 3")
+	if len(r.combinedCA) != 0 {
+		glog.Infof("DBG: caUpdater RoundTrip: has r.combinedCA")
+		bundle := getSigningCAbundle(r.lister)
+		if len(bundle) != 0 {
+			glog.Infof("DBG: caUpdater RoundTrip: got a bundle update")
+		}
+		return runCARoundTrip(req, r.combinedCA, r.serverName)
+	}
+
 	resp, err := r.rt.RoundTrip(req)
 	if err != nil && err.Error() == "x509: certificate signed by unknown authority" {
-		glog.Infof("DBG: caUpdater RoundTrip: got err %v", err)
+		glog.Infof("DBG: caUpdater RoundTrip: got x509 err %v", err)
 
-		newCAbundle := getSigningCAbundle(r.clientConfig)
+		newCAbundle := getSigningCAbundle(r.lister)
 		if len(newCAbundle) > 0 {
-			glog.Infof("DBG: serviceProxyHandler ServeHTTP: got new CA bundle to combine")
-			combinedBundle := append(r.restConfig.CAData, []byte(newCAbundle)...)
-			newRestConfig := &restclient.Config{
-				TLSClientConfig: restclient.TLSClientConfig{
-					ServerName: r.restConfig.ServerName,
-					CAData:     combinedBundle,
-				},
-			}
+			glog.Infof("DBG: caUpdater RoundTrip: got new CA bundle to combine")
+			combinedBundle := append(r.handlerCA, []byte(newCAbundle)...)
+			r.configMapCALock.Lock()
+			defer r.configMapCALock.Unlock()
+			r.combinedCA = combinedBundle
 
-			rt, err := restclient.TransportFor(newRestConfig)
-			if err != nil {
-				return nil, err
-			}
-			return rt.RoundTrip(req)
+			glog.Infof("DBG: serviceProxyHandler ServeHTTP: running runCARoundTrip()")
+			return runCARoundTrip(req, r.combinedCA, r.serverName)
 		}
+		glog.Infof("DBG: caUpdater RoundTrip: falling off due to no bundle")
 	}
 	return resp, err
 }
 
 // newServiceProxyHandler is a simple proxy that doesn't handle upgrades, passes headers directly through, and doesn't assert any identity.
-func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string, serviceNamespace string, serviceResolver ServiceResolver, caBundle []byte, applicationDisplayName string) (*serviceProxyHandler, error) {
+func newServiceProxyHandler(configMapLister listersv1.ConfigMapLister, serviceName string, serviceNamespace string, serviceResolver ServiceResolver, caBundle []byte, applicationDisplayName string) (*serviceProxyHandler, error) {
 	restConfig := &restclient.Config{
 		TLSClientConfig: restclient.TLSClientConfig{
 			ServerName: serviceName + "." + serviceNamespace + ".svc",
@@ -139,9 +164,11 @@ func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string,
 	}
 
 	caRoundTripper := &caUpdater{
-		rt:           proxyRoundTripper,
-		restConfig:   restConfig,
-		clientConfig: clientConfig,
+		rt:              proxyRoundTripper,
+		serverName:      restConfig.ServerName,
+		handlerCA:       restConfig.CAData,
+		lister:          configMapLister,
+		configMapCALock: sync.Mutex{},
 	}
 
 	return &serviceProxyHandler{
@@ -151,7 +178,6 @@ func newServiceProxyHandler(clientConfig *restclient.Config, serviceName string,
 		applicationDisplayName: applicationDisplayName,
 		proxyRoundTripper:      caRoundTripper,
 		restConfig:             restConfig,
-		clientConfig:           clientConfig,
 	}, nil
 }
 
