@@ -24,7 +24,7 @@ const (
 func BuildHandlerChain(genericConfig *genericapiserver.Config, kubeInformers informers.SharedInformerFactory, kubeAPIServerConfig *configapi.MasterConfig) (func(apiHandler http.Handler, kc *genericapiserver.Config) http.Handler, map[string]genericapiserver.PostStartHookFunc, error) {
 	extraPostStartHooks := map[string]genericapiserver.PostStartHookFunc{}
 
-	webconsoleProxyHandler, err := newWebConsoleProxy(kubeInformers, kubeAPIServerConfig)
+	webconsoleProxyHandler, caTransportUpdater, err := newWebConsoleProxy(kubeInformers, kubeAPIServerConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -43,6 +43,11 @@ func BuildHandlerChain(genericConfig *genericapiserver.Config, kubeInformers inf
 			// TODO stop proxying the webconsole. Should happen in a future release.
 			extraPostStartHooks["openshift.io-webconsolepublicurl"] = func(context genericapiserver.PostStartHookContext) error {
 				go accessor.Run(context.StopCh)
+				return nil
+			}
+
+			extraPostStartHooks["openshift.io-catransportupdater"] = func(context genericapiserver.PostStartHookContext) error {
+				go caTransportUpdater.Run(context.StopCh)
 				return nil
 			}
 
@@ -70,27 +75,23 @@ func BuildHandlerChain(genericConfig *genericapiserver.Config, kubeInformers inf
 		nil
 }
 
-func newWebConsoleProxy(kubeInformers informers.SharedInformerFactory, kubeAPIServerConfig *configapi.MasterConfig) (http.Handler, error) {
+func newWebConsoleProxy(kubeInformers informers.SharedInformerFactory, kubeAPIServerConfig *configapi.MasterConfig) (http.Handler, *serviceCABundleUpdater, error) {
 	caBundle, err := ioutil.ReadFile(kubeAPIServerConfig.ControllerConfig.ServiceServingCert.Signer.CertFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	proxyRoundTripper := &serviceCABundleRoundTripper{
-		serverName: "webconsole.openshift-web-console.svc",
-		handlerCA:  caBundle,
-		lister:     kubeInformers.Core().V1().ConfigMaps().Lister(),
-	}
+	caBundleUpdater, err := NewServiceCABundleUpdater(kubeInformers, "webconsole.openshift-web-console.svc", caBundle)
 
 	proxyHandler := &serviceProxyHandler{
 		serviceName:            "webconsole",
 		serviceNamespace:       "openshift-web-console",
 		serviceResolver:        aggregatorapiserver.NewClusterIPServiceResolver(kubeInformers.Core().V1().Services().Lister()),
 		applicationDisplayName: "OpenShift web console",
-		proxyRoundTripper:      proxyRoundTripper,
+		proxyRoundTripper:      caBundleUpdater.rt,
 	}
 
-	return proxyHandler, nil
+	return proxyHandler, caBundleUpdater, nil
 }
 
 func withOAuthRedirection(kubeAPIServerConfig *configapi.MasterConfig, handler, oauthServerHandler http.Handler) http.Handler {

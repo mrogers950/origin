@@ -3,41 +3,34 @@ package openshiftkubeapiserver
 import (
 	"net/http"
 
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/informers"
 	listersv1 "k8s.io/client-go/listers/core/v1"
 	restclient "k8s.io/client-go/rest"
+	cache "k8s.io/client-go/tools/cache"
+
+	"fmt"
+	"time"
+
+	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/workqueue"
 )
 
-// serviceCABundleRoundTripper uses its own RoundTripper configured with a CA bundle containing both
-// handlerCA and the SSCS CA bundle read from the SSCS CA bundle configMap.
+// serviceCABundleRoundTripper creates a new RoundTripper for each request with serverName and caBundle input into the
+// TLSClientConfig. It is expected that caBundle is kept up to date by the serviceCABundleUpdater controller.
 type serviceCABundleRoundTripper struct {
 	serverName string
-	handlerCA  []byte
-	lister     listersv1.ConfigMapLister
-}
-
-func (r *serviceCABundleRoundTripper) getServiceCABundle() string {
-	configMap, err := r.lister.ConfigMaps("openshift-service-cert-signer").Get("signing-cabundle")
-	if err != nil {
-		return ""
-	}
-	bundle, ok := configMap.Data["cabundle.crt"]
-	if !ok {
-		return ""
-	}
-	return bundle
+	caBundle   []byte
 }
 
 func (r *serviceCABundleRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	combinedCA := make([]byte, len(r.handlerCA))
-	copy(combinedCA, r.handlerCA)
-	bundle := r.getServiceCABundle()
-	if len(bundle) != 0 {
-		combinedCA = append(combinedCA, []byte(bundle)...)
-	}
 	newRestConfig := &restclient.Config{
 		TLSClientConfig: restclient.TLSClientConfig{
 			ServerName: r.serverName,
-			CAData:     combinedCA,
+			CAData:     r.caBundle,
 		},
 	}
 
@@ -46,4 +39,158 @@ func (r *serviceCABundleRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	return rt.RoundTrip(req)
+}
+
+const (
+	caBundleDataKey              = "cabundle.crt"
+	serviceCABundleNamespace     = "openshift-service-cert-signer"
+	serviceCABundleConfigMapName = "signing-cabundle"
+)
+
+// serviceCABundleUpdater runs a simple controller to keep rt.caBundle updated with CAs from the service-ca controller.
+type serviceCABundleUpdater struct {
+	// Initial CA bundle that CA updates are tacked on to.
+	startingHandlerCA []byte
+	// RoundTripper that utilizes the updated CA bundle.
+	rt *serviceCABundleRoundTripper
+
+	lister      listersv1.ConfigMapLister
+	queue       workqueue.RateLimitingInterface
+	hasSynced   cache.InformerSynced
+	syncHandler func(serviceKey string) error
+}
+
+func isServiceCABundleConfigMap(configMap *v1.ConfigMap) bool {
+	return configMap.Namespace == serviceCABundleNamespace && configMap.Name == serviceCABundleConfigMapName
+}
+
+// addCABundle is the informer's AddFunc.
+func (u *serviceCABundleUpdater) addCABundle(obj interface{}) {
+	cm := obj.(*v1.ConfigMap)
+	if !isServiceCABundleConfigMap(cm) {
+		return
+	}
+
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(cm)
+	if err != nil {
+		glog.Errorf("Couldn't get key for object %+v: %v", cm, err)
+		return
+	}
+
+	glog.V(4).Infof("serviceCABundleUpdater controller: queuing an add of %v", key)
+	u.queue.Add(key)
+}
+
+// updateCABundle is the informer's UpdateFunc.
+func (u *serviceCABundleUpdater) updateCABundle(old, cur interface{}) {
+	cm := cur.(*v1.ConfigMap)
+	if !isServiceCABundleConfigMap(cm) {
+		return
+	}
+
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(cm)
+	if err != nil {
+		glog.Errorf("Couldn't get key for object %+v: %v", cm, err)
+		return
+	}
+
+	glog.V(4).Infof("serviceCABundleUpdater controller: queuing an update of %v", key)
+	u.queue.Add(key)
+}
+
+// processNextWorkItem processes the queued items.
+func (u *serviceCABundleUpdater) processNextWorkItem() bool {
+	key, quit := u.queue.Get()
+	if quit {
+		return false
+	}
+	defer u.queue.Done(key)
+
+	err := u.syncHandler(key.(string))
+	if err == nil {
+		u.queue.Forget(key)
+		return true
+	}
+
+	utilruntime.HandleError(fmt.Errorf("%v failed with : %v", key, err))
+	u.queue.AddRateLimited(key)
+
+	return true
+}
+
+// Run runs the controller until stopCh is closed.
+func (u *serviceCABundleUpdater) Run(stopCh <-chan struct{}) {
+	defer utilruntime.HandleCrash()
+	defer u.queue.ShutDown()
+
+	if !cache.WaitForCacheSync(stopCh, u.hasSynced) {
+		return
+	}
+
+	glog.V(2).Infof("starting serviceCABundleUpdater controller")
+	go wait.Until(u.runWorker, time.Second, stopCh)
+	<-stopCh
+	glog.V(2).Infof("stopping serviceCABundleUpdater controller")
+}
+
+// runWorker repeatedly calls processNextWorkItem until the latter wants to exit.
+func (u *serviceCABundleUpdater) runWorker() {
+	for u.processNextWorkItem() {
+	}
+}
+
+// syncCABundle will update the RoundTripper's CA bundle by combining the starting CA with the updated CA from the
+// service CA configMap.
+func (u *serviceCABundleUpdater) syncCABundle(key string) error {
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		return err
+	}
+
+	sharedConfigMap, err := u.lister.ConfigMaps(namespace).Get(name)
+	if kapierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	data, ok := sharedConfigMap.Data[caBundleDataKey]
+	if !ok {
+		return nil
+	}
+
+	combinedCA := make([]byte, len(u.startingHandlerCA))
+	copy(combinedCA, u.startingHandlerCA)
+	combinedCA = append(combinedCA, data...)
+
+	u.rt.caBundle = combinedCA
+	glog.V(4).Infof("serviceCABundleUpdater controller: updated caBundle")
+	return nil
+}
+
+// NewServiceCABundleUpdater creates a new serviceCABundleUpdater controller.
+func NewServiceCABundleUpdater(kubeInformers informers.SharedInformerFactory, serverName string, caBundle []byte) (*serviceCABundleUpdater, error) {
+	roundTripper := &serviceCABundleRoundTripper{
+		serverName: serverName,
+		caBundle:   caBundle,
+	}
+
+	updater := &serviceCABundleUpdater{
+		rt:                roundTripper,
+		lister:            kubeInformers.Core().V1().ConfigMaps().Lister(),
+		startingHandlerCA: caBundle,
+		queue:             workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+	}
+
+	kubeInformers.Core().V1().ConfigMaps().Informer().AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    updater.addCABundle,
+			UpdateFunc: updater.updateCABundle,
+		},
+	)
+
+	updater.hasSynced = kubeInformers.Core().V1().ConfigMaps().Informer().HasSynced
+	updater.syncHandler = updater.syncCABundle
+	return updater, nil
 }
