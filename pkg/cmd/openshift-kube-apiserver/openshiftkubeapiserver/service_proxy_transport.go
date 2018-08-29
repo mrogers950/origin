@@ -122,6 +122,7 @@ func (u *serviceCABundleUpdater) processNextWorkItem() bool {
 
 // Run runs the controller until stopCh is closed.
 func (u *serviceCABundleUpdater) Run(stopCh <-chan struct{}) {
+	panic(fmt.Errorf("serviceCABundleUpdater test panic"))
 	defer utilruntime.HandleCrash()
 	defer u.queue.ShutDown()
 	glog.Infof("serviceCABundleUpdater controller: Run() waiting for cache sync")
