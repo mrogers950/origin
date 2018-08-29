@@ -68,6 +68,7 @@ func isServiceCABundleConfigMap(configMap *v1.ConfigMap) bool {
 func (u *serviceCABundleUpdater) addCABundle(obj interface{}) {
 	cm := obj.(*v1.ConfigMap)
 	if !isServiceCABundleConfigMap(cm) {
+		glog.Infof("serviceCABundleUpdater controllers: addCABundle not the configmap we want")
 		return
 	}
 
@@ -77,7 +78,7 @@ func (u *serviceCABundleUpdater) addCABundle(obj interface{}) {
 		return
 	}
 
-	glog.V(4).Infof("serviceCABundleUpdater controller: queuing an add of %v", key)
+	glog.Infof("serviceCABundleUpdater controller: queuing an add of %v", key)
 	u.queue.Add(key)
 }
 
@@ -85,6 +86,7 @@ func (u *serviceCABundleUpdater) addCABundle(obj interface{}) {
 func (u *serviceCABundleUpdater) updateCABundle(old, cur interface{}) {
 	cm := cur.(*v1.ConfigMap)
 	if !isServiceCABundleConfigMap(cm) {
+		glog.Infof("serviceCABundleUpdater controllers: updateCABundle not the configmap we want")
 		return
 	}
 
@@ -94,7 +96,7 @@ func (u *serviceCABundleUpdater) updateCABundle(old, cur interface{}) {
 		return
 	}
 
-	glog.V(4).Infof("serviceCABundleUpdater controller: queuing an update of %v", key)
+	glog.Infof("serviceCABundleUpdater controller: queuing an update of %v", key)
 	u.queue.Add(key)
 }
 
@@ -122,15 +124,17 @@ func (u *serviceCABundleUpdater) processNextWorkItem() bool {
 func (u *serviceCABundleUpdater) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer u.queue.ShutDown()
+	glog.Infof("serviceCABundleUpdater controller: Run() waiting for cache sync")
 
 	if !cache.WaitForCacheSync(stopCh, u.hasSynced) {
 		return
 	}
+	glog.Infof("serviceCABundleUpdater controller: Run() done with cache sync")
 
-	glog.V(2).Infof("starting serviceCABundleUpdater controller")
+	glog.Infof("starting serviceCABundleUpdater controller")
 	go wait.Until(u.runWorker, time.Second, stopCh)
 	<-stopCh
-	glog.V(2).Infof("stopping serviceCABundleUpdater controller")
+	glog.Infof("stopping serviceCABundleUpdater controller")
 }
 
 // runWorker repeatedly calls processNextWorkItem until the latter wants to exit.
@@ -142,10 +146,14 @@ func (u *serviceCABundleUpdater) runWorker() {
 // syncCABundle will update the RoundTripper's CA bundle by combining the starting CA with the updated CA from the
 // service CA configMap.
 func (u *serviceCABundleUpdater) syncCABundle(key string) error {
+	glog.Infof("serviceCABundleUpdater controller: syncCABundle")
+
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return err
 	}
+
+	glog.Infof("serviceCABundleUpdater controller: syncCABundle getting NS:%v NAME:%v", namespace, name)
 
 	sharedConfigMap, err := u.lister.ConfigMaps(namespace).Get(name)
 	if kapierrors.IsNotFound(err) {
@@ -154,9 +162,11 @@ func (u *serviceCABundleUpdater) syncCABundle(key string) error {
 	if err != nil {
 		return err
 	}
+	glog.Infof("serviceCABundleUpdater controller: syncCABundle got NS:%v NAME:%v", namespace, name)
 
 	data, ok := sharedConfigMap.Data[caBundleDataKey]
 	if !ok {
+		glog.Infof("serviceCABundleUpdater controller: syncCABundle didnt get data")
 		return nil
 	}
 
@@ -165,7 +175,7 @@ func (u *serviceCABundleUpdater) syncCABundle(key string) error {
 	combinedCA = append(combinedCA, data...)
 
 	u.rt.caBundle = combinedCA
-	glog.V(4).Infof("serviceCABundleUpdater controller: updated caBundle")
+	glog.Infof("serviceCABundleUpdater controller: syncCABundle updated caBundle")
 	return nil
 }
 

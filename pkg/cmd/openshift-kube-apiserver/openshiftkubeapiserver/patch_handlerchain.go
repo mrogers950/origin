@@ -82,6 +82,9 @@ func newWebConsoleProxy(kubeInformers informers.SharedInformerFactory, kubeAPISe
 	}
 
 	caBundleUpdater, err := NewServiceCABundleUpdater(kubeInformers, "webconsole.openshift-web-console.svc", caBundle)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	proxyHandler := &serviceProxyHandler{
 		serviceName:            "webconsole",
